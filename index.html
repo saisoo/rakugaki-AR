@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>らくがきAR — 낙서를 살아나게 하기</title>
+<style>
+  :root{
+    --ink:#1c1a17;
+    --paper:#f6f1e6;
+    --paper2:#efe6d2;
+    --accent:#ff5a36;
+    --accent2:#2ac9a0;
+    --pencil:#3b3630;
+    --line:rgba(28,26,23,0.14);
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    background:var(--ink);
+    font-family:'Hiragino Sans','Noto Sans KR',-apple-system,BlinkMacSystemFont,sans-serif;
+    overflow:hidden;
+    overscroll-behavior:none;
+    color:var(--ink);
+  }
+  #app{
+    position:fixed; inset:0;
+    width:100%; height:100%;
+  }
+
+  /* ---------- stage (webcam + canvas) ---------- */
+  #stage{
+    position:absolute; inset:0;
+    background:#000;
+  }
+  #video{
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    object-fit:cover;
+    transform:scaleX(-1);
+  }
+  #renderCanvas{
+    position:absolute; inset:0;
+    width:100%; height:100%;
+  }
+
+  /* ---------- top bar ---------- */
+  #topbar{
+    position:absolute; top:0; left:0; right:0;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:calc(env(safe-area-inset-top) + 10px) 14px 10px;
+    z-index:40;
+    pointer-events:none;
+  }
+  #topbar > *{ pointer-events:auto; }
+  .brand{
+    font-size:15px; font-weight:800; letter-spacing:0.02em;
+    color:#fff; text-shadow:0 1px 6px rgba(0,0,0,0.5);
+    display:flex; align-items:center; gap:6px;
+  }
+  .brand .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);display:inline-block;}
+  .iconbtn{
+    width:38px;height:38px;border-radius:50%;
+    background:rgba(20,18,16,0.45);
+    backdrop-filter:blur(6px);
+    border:1px solid rgba(255,255,255,0.18);
+    display:flex; align-items:center; justify-content:center;
+    color:#fff; font-size:17px;
+  }
+
+  /* ---------- bottom dock ---------- */
+  #dock{
+    position:absolute; left:0; right:0; bottom:0;
+    padding:0 16px calc(env(safe-area-inset-bottom) + 14px);
+    z-index:40;
+    display:flex; flex-direction:column; align-items:center; gap:10px;
+    pointer-events:none;
+  }
+  #dock > *{pointer-events:auto;}
+
+  .tray{
+    display:flex; gap:10px; align-items:center;
+    background:rgba(20,18,16,0.5);
+    backdrop-filter:blur(8px);
+    border:1px solid rgba(255,255,255,0.15);
+    border-radius:20px;
+    padding:8px 10px;
+  }
+  .tray button{
+    border:none; background:transparent; color:#fff;
+    font-size:22px; width:40px; height:40px; border-radius:14px;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .tray button.active{ background:var(--accent); }
+  .tray .sep{width:1px;height:22px;background:rgba(255,255,255,0.2);}
+
+  .primaryRow{
+    display:flex; align-items:center; justify-content:center; gap:26px;
+    width:100%;
+  }
+  #addBtn{
+    width:68px;height:68px;border-radius:50%;
+    background:var(--accent);
+    border:4px solid rgba(255,255,255,0.85);
+    box-shadow:0 4px 18px rgba(0,0,0,0.4);
+    color:#fff; font-size:28px; font-weight:700;
+    display:flex; align-items:center; justify-content:center;
+  }
+  #addBtn:active{transform:scale(0.94);}
+  .sideBtn{
+    width:48px;height:48px;border-radius:50%;
+    background:rgba(20,18,16,0.5);
+    border:1px solid rgba(255,255,255,0.18);
+    color:#fff; font-size:20px;
+    display:flex; align-items:center; justify-content:center;
+  }
+
+  .hint{
+    color:#fff; font-size:12.5px; text-align:center;
+    background:rgba(20,18,16,0.5);
+    padding:6px 12px; border-radius:12px;
+    max-width:88vw;
+    text-shadow:none;
+  }
+
+  /* ---------- capture overlay ---------- */
+  #scanOverlay{
+    position:absolute; inset:0; z-index:50;
+    display:none;
+    background:#000;
+  }
+  #scanOverlay.show{display:block;}
+  #scanFrame{
+    position:absolute; inset:0;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .scanGuide{
+    width:min(78vw, 420px); height:min(58vh, 420px);
+    border:3px dashed rgba(255,255,255,0.85);
+    border-radius:18px;
+    box-shadow:0 0 0 2000px rgba(0,0,0,0.35);
+    position:relative;
+  }
+  .scanGuide::after{
+    content:'종이 위 낙서를 사각형 안에 맞춰주세요';
+    position:absolute; bottom:-38px; left:50%; transform:translateX(-50%);
+    color:#fff; font-size:13px; white-space:nowrap;
+    background:rgba(0,0,0,0.5); padding:5px 12px; border-radius:10px;
+  }
+  #scanControls{
+    position:absolute; bottom:calc(env(safe-area-inset-bottom) + 26px); left:0; right:0;
+    display:flex; justify-content:center; gap:22px; align-items:center;
+  }
+  #scanShutter{
+    width:74px;height:74px;border-radius:50%;
+    background:#fff; border:5px solid rgba(255,90,54,0.9);
+  }
+  #scanShutter:active{transform:scale(0.94);}
+  .scanClose, .scanThresh{
+    width:46px;height:46px;border-radius:50%;
+    background:rgba(255,255,255,0.15); color:#fff;
+    border:1px solid rgba(255,255,255,0.3);
+    font-size:18px; display:flex; align-items:center; justify-content:center;
+  }
+  #threshSlider{
+    position:absolute; top:calc(env(safe-area-inset-top) + 18px); left:50%; transform:translateX(-50%);
+    width:70vw; max-width:320px;
+    accent-color:var(--accent);
+  }
+
+  /* preview after threshold, before confirming character */
+  #previewPane{
+    position:absolute; inset:0; z-index:51;
+    background:#0d0c0b;
+    display:none;
+    flex-direction:column;
+  }
+  #previewPane.show{display:flex;}
+  #previewCanvasWrap{
+    flex:1; display:flex; align-items:center; justify-content:center;
+    padding:20px;
+  }
+  #previewCanvas{
+    max-width:90vw; max-height:60vh;
+    background:
+      linear-gradient(45deg,#2b2823 25%,transparent 25%) -10px 0/20px 20px,
+      linear-gradient(-45deg,#2b2823 25%,transparent 25%) -10px 0/20px 20px,
+      linear-gradient(45deg,transparent 75%,#2b2823 75%) -10px 0/20px 20px,
+      linear-gradient(-45deg,transparent 75%,#2b2823 75%) -10px 0/20px 20px,
+      #35322c;
+    border-radius:14px;
+    box-shadow:0 8px 30px rgba(0,0,0,0.5);
+  }
+  #previewInfo{
+    text-align:center; color:#fff; font-size:13px; opacity:0.75; padding:0 20px 6px;
+  }
+  #previewActions{
+    display:flex; justify-content:center; gap:16px;
+    padding:16px 20px calc(env(safe-area-inset-bottom) + 20px);
+  }
+  .bigbtn{
+    flex:1; max-width:220px;
+    padding:15px 10px; border-radius:16px; border:none;
+    font-size:15px; font-weight:700;
+  }
+  .bigbtn.primary{background:var(--accent); color:#fff;}
+  .bigbtn.ghost{background:rgba(255,255,255,0.12); color:#fff; border:1px solid rgba(255,255,255,0.25);}
+
+  /* ---------- draw pane ---------- */
+  #drawPane{
+    position:absolute; inset:0; z-index:51;
+    background:var(--paper);
+    display:none; flex-direction:column;
+  }
+  #drawPane.show{display:flex;}
+  #drawCanvasWrap{
+    flex:1; position:relative; overflow:hidden;
+    background-image:
+      linear-gradient(var(--line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size:26px 26px;
+  }
+  #drawCanvas{position:absolute; inset:0; width:100%; height:100%; touch-action:none;}
+  #drawTools{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    padding:calc(env(safe-area-inset-top) + 10px) 14px 10px;
+    background:var(--paper);
+  }
+  #drawBottom{
+    display:flex; align-items:center; justify-content:center; gap:14px;
+    padding:12px 16px calc(env(safe-area-inset-bottom) + 16px);
+    background:var(--paper);
+  }
+  .penDot{width:22px;height:22px;border-radius:50%;border:2px solid rgba(0,0,0,0.15);}
+  #drawTools button, #drawBottom button{
+    border:none; background:var(--paper2); color:var(--ink);
+    padding:9px 14px; border-radius:12px; font-size:14px; font-weight:600;
+  }
+  #drawBottom .go{background:var(--accent); color:#fff;}
+
+  /* ---------- toast ---------- */
+  #toast{
+    position:absolute; left:50%; top:16%; transform:translate(-50%,0);
+    background:rgba(20,18,16,0.85); color:#fff;
+    padding:10px 18px; border-radius:14px; font-size:13.5px;
+    z-index:80; opacity:0; transition:opacity 0.25s, top 0.25s;
+    pointer-events:none; max-width:80vw; text-align:center;
+  }
+  #toast.show{opacity:1; top:20%;}
+
+  /* ---------- character tray (bottom-left mini list) ---------- */
+  #charTray{
+    position:absolute; left:10px; top:calc(env(safe-area-inset-top) + 56px);
+    display:flex; flex-direction:column; gap:8px; z-index:35;
+  }
+  .charChip{
+    width:44px;height:44px;border-radius:12px;
+    background:rgba(20,18,16,0.5); border:1px solid rgba(255,255,255,0.2);
+    display:flex; align-items:center; justify-content:center;
+    overflow:hidden;
+  }
+  .charChip img{width:80%;height:80%;object-fit:contain; filter:drop-shadow(0 0 2px rgba(0,0,0,0.6));}
+  .charChip.empty{opacity:0.4;}
+
+  /* recording indicator */
+  #recDot{
+    position:absolute; top:calc(env(safe-area-inset-top) + 10px); left:50%; transform:translateX(-50%);
+    background:rgba(0,0,0,0.5); color:#fff; font-size:12px;
+    padding:6px 12px; border-radius:20px; display:none; align-items:center; gap:6px;
+    z-index:41;
+  }
+  #recDot.show{display:flex;}
+  #recDot .rd{width:8px;height:8px;border-radius:50%;background:#ff3b30; animation:blink 1s infinite;}
+  @keyframes blink{50%{opacity:0.2;}}
+
+  canvas{touch-action:none;}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div id="stage">
+    <video id="video" autoplay playsinline muted></video>
+    <canvas id="renderCanvas"></canvas>
+  </div>
+
+  <div id="recDot"><span class="rd"></span>REC</div>
+
+  <div id="charTray"></div>
+
+  <div id="topbar">
+    <div class="brand"><span class="dot"></span>낙서 AR</div>
+    <button class="iconbtn" id="helpBtn">?</button>
+  </div>
+
+  <div id="dock">
+    <div class="hint" id="mainHint">＋ 버튼으로 낙서를 스캔하거나 그려서 살려보세요</div>
+    <div class="tray">
+      <button id="feedBtn" title="먹이주기">🍎</button>
+      <button id="pokeModeBtn" title="찌르기">👆</button>
+      <div class="sep"></div>
+      <button id="photoBtn" title="사진 찍기">📷</button>
+      <button id="videoBtn" title="영상 녹화">⏺️</button>
+      <div class="sep"></div>
+      <button id="clearBtn" title="전부 지우기">🗑️</button>
+    </div>
+    <div class="primaryRow">
+      <button class="sideBtn" id="switchCamBtn">🔄</button>
+      <button id="addBtn">＋</button>
+      <button class="sideBtn" id="soundBtn">🔊</button>
+    </div>
+  </div>
+
+  <!-- SCAN OVERLAY -->
+  <div id="scanOverlay">
+    <div id="scanFrame"><div class="scanGuide"></div></div>
+    <input type="range" id="threshSlider" min="60" max="200" value="128">
+    <div id="scanControls">
+      <button class="scanClose" id="scanCloseBtn">✕</button>
+      <button id="scanShutter"></button>
+      <button class="scanThresh" id="scanFlipBtn">🔄</button>
+    </div>
+  </div>
+
+  <!-- PREVIEW PANE (after threshold extraction) -->
+  <div id="previewPane">
+    <div id="previewInfo">이 모양대로 캐릭터가 만들어져요. 마음에 안 들면 다시 스캔하세요.</div>
+    <div id="previewCanvasWrap"><canvas id="previewCanvas"></canvas></div>
+    <div id="previewActions">
+      <button class="bigbtn ghost" id="previewRetryBtn">다시 스캔</button>
+      <button class="bigbtn primary" id="previewOkBtn">살아나라! ✨</button>
+    </div>
+  </div>
+
+  <!-- DRAW PANE -->
+  <div id="drawPane">
+    <div id="drawTools">
+      <button id="drawCloseBtn">✕ 취소</button>
+      <div style="display:flex; gap:8px;">
+        <button id="colorBlack" class="penDot" style="background:#1c1a17;"></button>
+        <button id="colorRed" class="penDot" style="background:#e0432b;"></button>
+        <button id="colorBlue" class="penDot" style="background:#2b5fe0;"></button>
+      </div>
+      <button id="undoBtn">↩ 지우기</button>
+    </div>
+    <div id="drawCanvasWrap"><canvas id="drawCanvas"></canvas></div>
+    <div id="drawBottom">
+      <button id="drawClearAllBtn">전체 지우기</button>
+      <button class="go" id="drawDoneBtn">살아나라! ✨</button>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+/* ============================================================
+   UTIL
+============================================================ */
+const $ = (id)=>document.getElementById(id);
+function toast(msg, ms=1800){
+  const t = $('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toast._tm);
+  toast._tm = setTimeout(()=>t.classList.remove('show'), ms);
+}
+function rand(a,b){return a+Math.random()*(b-a);}
+function clamp(v,a,b){return Math.max(a,Math.min(b,v));}
+function lerp(a,b,t){return a+(b-a)*t;}
+function dist(x1,y1,x2,y2){return Math.hypot(x2-x1,y2-y1);}
+
+/* simple audio blips using WebAudio, no external files/no copyrighted content */
+let audioCtx = null;
+let soundOn = true;
+function ensureAudio(){ if(!audioCtx){ try{ audioCtx = new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } }
+function blip(freq=440, dur=0.09, type='sine', vol=0.06){
+  if(!soundOn) return;
+  ensureAudio();
+  if(!audioCtx) return;
+  const t0 = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  osc.frequency.exponentialRampToValueAtTime(Math.max(60,freq*0.6), t0+dur);
+  gain.gain.setValueAtTime(vol, t0);
+  gain.gain.exponentialRampToValueAtTime(0.0001, t0+dur);
+  osc.connect(gain).connect(audioCtx.destination);
+  osc.start(t0);
+  osc.stop(t0+dur+0.02);
+}
+function sfxPoke(){ blip(rand(500,700),0.08,'triangle',0.05); }
+function sfxEat(){ blip(rand(300,420),0.12,'square',0.04); }
+function sfxSpawn(){ blip(660,0.1,'sine',0.05); setTimeout(()=>blip(880,0.12,'sine',0.05),90); }
+function sfxWall(){ blip(220,0.06,'sine',0.03); }
+
+/* ============================================================
+   CAMERA
+============================================================ */
+const video = $('video');
+const renderCanvas = $('renderCanvas');
+const rctx = renderCanvas.getContext('2d');
+let currentFacing = 'environment';
+let camStream = null;
+
+async function startCamera(facing){
+  if(camStream){
+    camStream.getTracks().forEach(t=>t.stop());
+  }
+  const constraints = {
+    audio:false,
+    video:{ facingMode: facing, width:{ideal:1280}, height:{ideal:720} }
+  };
+  try{
+    camStream = await navigator.mediaDevices.getUserMedia(constraints);
+    video.srcObject = camStream;
+    currentFacing = facing;
+    // front camera visually mirrored, back camera not
+    video.style.transform = (facing === 'user') ? 'scaleX(-1)' : 'scaleX(1)';
+  }catch(err){
+    toast('카메라 권한이 필요해요 🙏');
+    console.error(err);
+  }
+}
+function resizeCanvases(){
+  const w = window.innerWidth, h = window.innerHeight;
+  const dpr = Math.min(window.devicePixelRatio||1, 2);
+  [renderCanvas].forEach(c=>{
+    c.width = w*dpr; c.height = h*dpr;
+    c.style.width = w+'px'; c.style.height = h+'px';
+  });
+  rctx.setTransform(dpr,0,0,dpr,0,0);
+}
+window.addEventListener('resize', resizeCanvases);
+resizeCanvases();
+startCamera(currentFacing);
+
+$('switchCamBtn').addEventListener('click', ()=>{
+  startCamera(currentFacing==='user' ? 'environment' : 'user');
+});
+
+/* ============================================================
+   CHARACTER MODEL
+   Each character built from a silhouette (ImageBitmap w/ alpha).
+   We slice it into head/body/legL/legR based on bounding box,
+   then animate legs with a walk-cycle rotation around hip pivot.
+============================================================ */
+
+class Doodle {
+  constructor(silhouetteCanvas, spawnX, spawnY){
+    this.src = silhouetteCanvas; // full silhouette, alpha-cut, canvas
+    this.w = silhouetteCanvas.width;
+    this.h = silhouetteCanvas.height;
+
+    // target render size on screen (keep aspect, cap height)
+    const targetH = clamp(window.innerHeight*0.22, 90, 240);
+    this.scale = targetH/this.h;
+    this.dispW = this.w*this.scale;
+    this.dispH = this.h*this.scale;
+
+    this.x = spawnX;
+    this.y = spawnY;
+    this.dir = Math.random()<0.5?-1:1; // facing left/right
+    this.speed = rand(18,34); // px/sec
+    this.state = 'walk'; // walk, idle, poked, eating, turning
+    this.stateTimer = 0;
+    this.walkPhase = Math.random()*Math.PI*2;
+    this.bobPhase = Math.random()*Math.PI*2;
+    this.scaleBounce = 1;
+    this.targetFood = null;
+    this.hueShift = 0;
+    this.decideNextMove(true);
+
+    // split silhouette into head(0-38%) / body(38-62%) / legs(62-100%)
+    this._buildParts();
+  }
+
+  _buildParts(){
+    const w=this.w, h=this.h;
+    const headH = Math.floor(h*0.40);
+    const bodyH = Math.floor(h*0.28);
+    const legH  = h - headH - bodyH;
+
+    this.partHead = this._sliceCanvas(0,0,w,headH);
+    this.partBody = this._sliceCanvas(0,headH,w,bodyH);
+
+    // legs: split left/right half, each becomes one leg
+    const legY = headH+bodyH;
+    const halfW = Math.ceil(w/2);
+    this.partLegL = this._sliceCanvas(0,legY,halfW,legH);
+    this.partLegR = this._sliceCanvas(w-halfW,legY,halfW,legH);
+    this.legPivotY = 4; // pivot near top of leg slice
+  }
+
+  _sliceCanvas(sx,sy,sw,sh){
+    sw = Math.max(1,sw); sh = Math.max(1,sh);
+    const c = document.createElement('canvas');
+    c.width = sw; c.height = sh;
+    const cx = c.getContext('2d');
+    cx.drawImage(this.src, sx,sy,sw,sh, 0,0,sw,sh);
+    return c;
+  }
+
+  decideNextMove(initial){
+    this.state = Math.random()<0.75 ? 'walk' : 'idle';
+    this.stateTimer = rand(1.4, 3.6);
+    if(!initial) this.dir = Math.random()<0.5 ? -1: 1;
+  }
+
+  poke(){
+    this.state = 'poked';
+    this.stateTimer = 0.5;
+    this.scaleBounce = 1.35;
+    sfxPoke();
+  }
+
+  startEating(food){
+    this.targetFood = food;
+    this.state = 'eating';
+  }
+
+  update(dt, bounds, others){
+    this.stateTimer -= dt;
+
+    // bounce scale ease back
+    this.scaleBounce = lerp(this.scaleBounce, 1, Math.min(1, dt*8));
+
+    if(this.state === 'eating' && this.targetFood && !this.targetFood.eaten){
+      const fx = this.targetFood.x, fy = this.targetFood.y;
+      const d = dist(this.x, this.y, fx, fy);
+      this.dir = (fx < this.x) ? -1 : 1;
+      if(d > 14){
+        this.x += (this.dir)*this.speed*1.3*dt;
+        this.walkPhase += dt*9;
+      } else {
+        // reached food
+        this.targetFood.eaten = true;
+        this.scaleBounce = 1.25;
+        sfxEat();
+        this.state = 'idle';
+        this.stateTimer = rand(0.6,1.2);
+        this.targetFood = null;
+      }
+    } else if(this.state === 'poked'){
+      if(this.stateTimer<=0){ this.decideNextMove(); }
+    } else if(this.state === 'walk'){
+      this.x += this.dir*this.speed*dt;
+      this.walkPhase += dt*6.2;
+      if(this.stateTimer<=0) this.decideNextMove();
+    } else { // idle
+      this.walkPhase += dt*1.2;
+      if(this.stateTimer<=0) this.decideNextMove();
+    }
+
+    this.bobPhase += dt*(this.state==='walk'?6.2:2.0);
+
+    // bounds bounce
+    const halfW = this.dispW/2;
+    if(this.x - halfW < bounds.left){ this.x = bounds.left+halfW; this.dir = 1; if(this.state==='walk') sfxWall(); }
+    if(this.x + halfW > bounds.right){ this.x = bounds.right-halfW; this.dir = -1; if(this.state==='walk') sfxWall(); }
+    this.y = clamp(this.y, bounds.top, bounds.bottom);
+
+    // simple avoidance with other doodles
+    for(const o of others){
+      if(o===this) continue;
+      const d = dist(this.x,this.y,o.x,o.y);
+      const minD = (this.dispW+o.dispW)*0.32;
+      if(d < minD && d>0.001){
+        const push = (minD-d)/minD;
+        const nx = (this.x-o.x)/d;
+        this.x += nx*push*40*dt;
+      }
+    }
+  }
+
+  draw(ctx){
+    const legSwing = Math.sin(this.walkPhase) * (this.state==='walk'||this.state==='eating' ? 0.55 : 0.08);
+    const bob = Math.abs(Math.sin(this.bobPhase)) * (this.state==='walk'||this.state==='eating' ? 6 : 2);
+    const pokeWiggle = this.state==='poked' ? Math.sin(this.stateTimer*40)*0.15 : 0;
+
+    ctx.save();
+    ctx.translate(this.x, this.y - bob);
+    ctx.scale(this.dir * this.scaleBounce, this.scaleBounce);
+    ctx.rotate(pokeWiggle);
+
+    const w = this.dispW, h = this.dispH;
+    const headH = h*0.40, bodyH = h*0.28, legH = h - headH - bodyH;
+    const halfW = w/2;
+
+    // legs (drawn first, behind body), pivot at top of each leg
+    this._drawLeg(ctx, this.partLegL, -halfW/2, headH+bodyH - h/2,  halfW, legH,  legSwing);
+    this._drawLeg(ctx, this.partLegR, 0,        headH+bodyH - h/2,  halfW, legH, -legSwing);
+
+    // body
+    ctx.drawImage(this.partBody, -halfW, headH - h/2, w, bodyH);
+    // head (slight counter-bob)
+    ctx.save();
+    ctx.translate(0, -h/2);
+    ctx.rotate(Math.sin(this.walkPhase*0.5)*0.05);
+    ctx.drawImage(this.partHead, -halfW, 0, w, headH);
+    ctx.restore();
+
+    ctx.restore();
+
+    // eyes-ish sparkle when poked (simple particle, universal—not a face)
+  }
+
+  _drawLeg(ctx, img, xOff, yTop, legW, legH, swing){
+    ctx.save();
+    ctx.translate(xOff + legW/2, yTop);
+    ctx.rotate(swing);
+    ctx.drawImage(img, -legW/2, 0, legW, legH);
+    ctx.restore();
+  }
+
+  containsPoint(px,py){
+    const dx = px-this.x, dy = py-(this.y-4);
+    return Math.abs(dx) < this.dispW*0.55 && Math.abs(dy) < this.dispH*0.6;
+  }
+}
+
+/* ============================================================
+   FOOD
+============================================================ */
+const FOOD_EMOJIS = ['🍎','🍕','🍩','🍖','🧀','🍓'];
+class Food{
+  constructor(x,y){
+    this.x=x; this.y=y;
+    this.emoji = FOOD_EMOJIS[Math.floor(Math.random()*FOOD_EMOJIS.length)];
+    this.eaten=false;
+    this.spawnT=0;
+  }
+  update(dt){ this.spawnT+=dt; }
+  draw(ctx){
+    if(this.eaten) return;
+    ctx.save();
+    ctx.translate(this.x,this.y);
+    const bob = Math.sin(this.spawnT*4)*3;
+    ctx.translate(0,bob);
+    ctx.font = '30px sans-serif';
+    ctx.textAlign='center'; ctx.textBaseline='middle';
+    ctx.shadowColor='rgba(0,0,0,0.4)'; ctx.shadowBlur=8;
+    ctx.fillText(this.emoji,0,0);
+    ctx.restore();
+  }
+}
+
+/* ============================================================
+   WORLD STATE
+============================================================ */
+let doodles = [];
+let foods = [];
+let pokeMode = false;
+let feedModeArmed = false;
+
+function spawnDoodleFromSilhouette(silCanvas){
+  const w = window.innerWidth, h = window.innerHeight;
+  const x = rand(w*0.25, w*0.75);
+  const y = rand(h*0.4, h*0.72);
+  const d = new Doodle(silCanvas, x, y);
+  doodles.push(d);
+  sfxSpawn();
+  updateCharTray();
+  toast('낙서가 살아났어요! 화면을 눌러 찔러보세요 ✨');
+}
+
+function updateCharTray(){
+  const tray = $('charTray');
+  tray.innerHTML = '';
+  doodles.forEach((d,i)=>{
+    const chip = document.createElement('div');
+    chip.className='charChip';
+    const img = document.createElement('img');
+    img.src = d.src.toDataURL();
+    chip.appendChild(img);
+    chip.addEventListener('click', ()=>{
+      doodles.splice(i,1);
+      updateCharTray();
+      toast('캐릭터를 지웠어요');
+    });
+    tray.appendChild(chip);
+  });
+}
+
+$('clearBtn').addEventListener('click', ()=>{
+  if(doodles.length===0 && foods.length===0){ toast('지울 게 없어요'); return; }
+  doodles = [];
+  foods = [];
+  updateCharTray();
+  toast('모두 지웠어요');
+});
+
+/* ============================================================
+   MAIN RENDER LOOP — draws camera feed (mirrored appropriately)
+   into renderCanvas, then composites doodles+food on top.
+============================================================ */
+let lastT = performance.now();
+function frame(now){
+  const dt = Math.min(0.05, (now-lastT)/1000);
+  lastT = now;
+
+  const w = window.innerWidth, h = window.innerHeight;
+  rctx.clearRect(0,0,w,h);
+
+  // draw video frame manually (so we can mirror precisely & keep single canvas for capture)
+  if(video.readyState >= 2){
+    rctx.save();
+    if(currentFacing === 'user'){
+      rctx.translate(w,0); rctx.scale(-1,1);
+    }
+    // cover-fit
+    const vw = video.videoWidth, vh = video.videoHeight;
+    if(vw && vh){
+      const scale = Math.max(w/vw, h/vh);
+      const dw = vw*scale, dh = vh*scale;
+      const dx = (w-dw)/2, dy=(h-dh)/2;
+      rctx.drawImage(video, dx, dy, dw, dh);
+    }
+    rctx.restore();
+  }
+
+  const bounds = {left: w*0.06, right: w*0.94, top: h*0.28, bottom: h*0.86};
+
+  foods.forEach(f=>f.update(dt));
+  foods = foods.filter(f=>!f.eaten);
+
+  doodles.forEach(d=>d.update(dt, bounds, doodles));
+  // sort by y for depth
+  doodles.slice().sort((a,b)=>a.y-b.y).forEach(d=>d.draw(rctx));
+  foods.forEach(f=>f.draw(rctx));
+
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* ============================================================
+   TAP INTERACTION on stage: poke doodle or drop food
+============================================================ */
+renderCanvas.addEventListener('pointerdown', (e)=>{
+  const rect = renderCanvas.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+
+  // check doodle hit first
+  let hit = null;
+  for(let i=doodles.length-1;i>=0;i--){
+    if(doodles[i].containsPoint(x,y)){ hit = doodles[i]; break; }
+  }
+
+  if(feedModeArmed){
+    const f = new Food(x,y);
+    foods.push(f);
+    // nearest doodle goes to eat it
+    let nearest=null, nd=Infinity;
+    doodles.forEach(d=>{ const dd=dist(d.x,d.y,x,y); if(dd<nd){nd=dd; nearest=d;} });
+    if(nearest) nearest.startEating(f);
+    return;
+  }
+
+  if(hit){
+    hit.poke();
+    return;
+  }
+});
+
+$('pokeModeBtn').addEventListener('click', ()=>{
+  toast('화면 속 캐릭터를 손가락으로 눌러 찔러보세요 👆');
+});
+$('feedBtn').addEventListener('click', ()=>{
+  feedModeArmed = !feedModeArmed;
+  $('feedBtn').classList.toggle('active', feedModeArmed);
+  toast(feedModeArmed ? '화면을 눌러 먹이를 놓아주세요 🍎' : '먹이주기 모드 해제');
+});
+$('soundBtn').addEventListener('click', ()=>{
+  soundOn = !soundOn;
+  $('soundBtn').textContent = soundOn ? '🔊' : '🔇';
+});
+$('helpBtn').addEventListener('click', ()=>{
+  toast('＋로 낙서를 스캔/그리기 → 화면 속에서 걸어다녀요. 손가락으로 찌르거나 🍎로 먹이를 줘보세요!', 3400);
+});
+
+/* ============================================================
+   ADD FLOW: choose scan vs draw
+============================================================ */
+$('addBtn').addEventListener('click', ()=>{
+  ensureAudio();
+  openAddChoice();
+});
+
+function openAddChoice(){
+  // simple inline choice via toast-based buttons isn't native; use quick confirm-like UI
+  addChoiceEl().classList.add('show');
+}
+let _addChoiceEl = null;
+function addChoiceEl(){
+  if(_addChoiceEl) return _addChoiceEl;
+  const wrap = document.createElement('div');
+  wrap.id = 'addChoice';
+  wrap.style.cssText = `
+    position:fixed; inset:0; z-index:60; display:none;
+    align-items:flex-end; justify-content:center;
+    background:rgba(0,0,0,0.4);
+  `;
+  wrap.innerHTML = `
+    <div style="background:var(--paper); width:100%; border-radius:22px 22px 0 0; padding:20px 20px calc(env(safe-area-inset-bottom) + 20px); display:flex; flex-direction:column; gap:12px;">
+      <div style="font-weight:800; font-size:16px; text-align:center; margin-bottom:4px;">낙서를 어떻게 만들까요?</div>
+      <button id="choiceScan" style="padding:16px; border-radius:14px; border:none; background:var(--accent); color:#fff; font-size:15px; font-weight:700;">📷 종이 낙서 웹캠으로 스캔하기</button>
+      <button id="choiceDraw" style="padding:16px; border-radius:14px; border:none; background:var(--paper2); color:var(--ink); font-size:15px; font-weight:700;">✏️ 화면에 직접 그리기</button>
+      <button id="choiceCancel" style="padding:12px; border-radius:14px; border:none; background:transparent; color:var(--ink); font-size:14px; opacity:0.6;">취소</button>
+    </div>
+  `;
+  document.body.appendChild(wrap);
+  wrap.addEventListener('click', (e)=>{ if(e.target===wrap) wrap.classList.remove('show'); });
+  wrap.querySelector('#choiceCancel').addEventListener('click', ()=>wrap.classList.remove('show'));
+  wrap.querySelector('#choiceScan').addEventListener('click', ()=>{ wrap.classList.remove('show'); openScan(); });
+  wrap.querySelector('#choiceDraw').addEventListener('click', ()=>{ wrap.classList.remove('show'); openDraw(); });
+
+  const styleFix = document.createElement('style');
+  styleFix.textContent = `#addChoice.show{display:flex !important;}`;
+  document.head.appendChild(styleFix);
+
+  _addChoiceEl = wrap;
+  return wrap;
+}
+
+/* ============================================================
+   SCAN FLOW
+============================================================ */
+const scanOverlay = $('scanOverlay');
+const threshSlider = $('threshSlider');
+let scanFacing = 'environment';
+
+function openScan(){
+  scanFacing = currentFacing;
+  scanOverlay.classList.add('show');
+}
+$('scanCloseBtn').addEventListener('click', ()=>scanOverlay.classList.remove('show'));
+$('scanFlipBtn').addEventListener('click', ()=>{
+  scanFacing = scanFacing==='user' ? 'environment' : 'user';
+  startCamera(scanFacing);
+});
+
+$('scanShutter').addEventListener('click', ()=>{
+  captureAndThreshold();
+});
+
+function captureAndThreshold(){
+  const guide = document.querySelector('.scanGuide');
+  const grect = guide.getBoundingClientRect();
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if(!vw || !vh){ toast('카메라 준비 중이에요, 잠시 후 다시 시도해주세요'); return; }
+
+  // map guide rect (screen coords, cover-fit video) back to video source coords
+  const w = window.innerWidth, h = window.innerHeight;
+  const scale = Math.max(w/vw, h/vh);
+  const dw = vw*scale, dh = vh*scale;
+  const dx = (w-dw)/2, dy=(h-dh)/2;
+
+  let sx = (grect.left - dx)/scale;
+  let sy = (grect.top - dy)/scale;
+  let sw = grect.width/scale;
+  let sh = grect.height/scale;
+
+  // account for mirroring on user-facing camera
+  const tmp = document.createElement('canvas');
+  tmp.width = sw; tmp.height = sh;
+  const tctx = tmp.getContext('2d');
+  if(scanFacing === 'user'){
+    tctx.save();
+    tctx.translate(sw,0); tctx.scale(-1,1);
+    tctx.drawImage(video, vw-(sx+sw), sy, sw, sh, 0,0,sw,sh);
+    tctx.restore();
+  } else {
+    tctx.drawImage(video, sx, sy, sw, sh, 0,0,sw,sh);
+  }
+
+  scanOverlay.classList.remove('show');
+  runThresholdPreview(tmp);
+}
+
+/* Otsu-ish simple threshold + flood-fill background removal to get silhouette with alpha */
+function runThresholdPreview(srcCanvas){
+  const previewPane = $('previewPane');
+  const pctx = $('previewCanvas').getContext('2d');
+  const pc = $('previewCanvas');
+
+  function process(){
+    const t = parseInt(threshSlider.value,10);
+    const result = thresholdToSilhouette(srcCanvas, t);
+    pc.width = result.width; pc.height = result.height;
+    pctx.clearRect(0,0,pc.width,pc.height);
+    pctx.drawImage(result,0,0);
+    pc._current = result;
+  }
+  threshSlider.oninput = process;
+  process();
+
+  previewPane.classList.add('show');
+  // keep threshold slider visible while adjusting from preview too
+  threshSlider.style.zIndex = 55;
+
+  $('previewRetryBtn').onclick = ()=>{
+    previewPane.classList.remove('show');
+    openScan();
+  };
+  $('previewOkBtn').onclick = ()=>{
+    previewPane.classList.remove('show');
+    spawnDoodleFromSilhouette(cloneCanvas(pc._current));
+  };
+}
+
+function cloneCanvas(c){
+  const n = document.createElement('canvas');
+  n.width=c.width; n.height=c.height;
+  n.getContext('2d').drawImage(c,0,0);
+  return n;
+}
+
+// Converts a color photo of dark ink on light paper into a transparent-bg silhouette,
+// then crops to the drawing's bounding box.
+function thresholdToSilhouette(srcCanvas, threshold){
+  const w = srcCanvas.width, h = srcCanvas.height;
+  const sctx = srcCanvas.getContext('2d');
+  const imgData = sctx.getImageData(0,0,w,h);
+  const data = imgData.data;
+
+  const out = document.createElement('canvas');
+  out.width = w; out.height = h;
+  const octx = out.getContext('2d');
+  const outData = octx.createImageData(w,h);
+  const od = outData.data;
+
+  let minX=w, minY=h, maxX=0, maxY=0;
+  for(let i=0;i<data.length;i+=4){
+    const r=data[i], g=data[i+1], b=data[i+2];
+    const lum = 0.299*r+0.587*g+0.114*b;
+    const isInk = lum < threshold;
+    const px = (i/4);
+    const x = px % w, y = Math.floor(px/w);
+    if(isInk){
+      od[i]=28; od[i+1]=26; od[i+2]=23; od[i+3]=255;
+      if(x<minX)minX=x; if(x>maxX)maxX=x;
+      if(y<minY)minY=y; if(y>maxY)maxY=y;
+    } else {
+      od[i]=0; od[i+1]=0; od[i+2]=0; od[i+3]=0;
+    }
+  }
+  octx.putImageData(outData,0,0);
+
+  if(maxX<minX || maxY<minY){
+    // nothing detected — return small blank silhouette to avoid crash
+    minX=0; minY=0; maxX=w-1; maxY=h-1;
+  }
+  const pad = Math.round(Math.max(w,h)*0.03);
+  minX = Math.max(0,minX-pad); minY = Math.max(0,minY-pad);
+  maxX = Math.min(w-1,maxX+pad); maxY = Math.min(h-1,maxY+pad);
+  const cw = maxX-minX+1, ch = maxY-minY+1;
+
+  const cropped = document.createElement('canvas');
+  cropped.width=cw; cropped.height=ch;
+  cropped.getContext('2d').drawImage(out, minX,minY,cw,ch, 0,0,cw,ch);
+
+  // thicken slightly via simple dilate pass for visibility (cheap box-blur threshold)
+  return dilateAlpha(cropped, 1);
+}
+
+function dilateAlpha(canvas, r){
+  const w=canvas.width, h=canvas.height;
+  const ctx = canvas.getContext('2d');
+  const src = ctx.getImageData(0,0,w,h);
+  const dst = ctx.createImageData(w,h);
+  const sd = src.data, dd = dst.data;
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      let a=0, rr=0,gg=0,bb=0;
+      for(let dy=-r;dy<=r && a===0;dy++){
+        for(let dx=-r;dx<=r && a===0;dx++){
+          const nx=x+dx, ny=y+dy;
+          if(nx<0||ny<0||nx>=w||ny>=h) continue;
+          const idx=(ny*w+nx)*4;
+          if(sd[idx+3]>0){ a=255; rr=sd[idx]; gg=sd[idx+1]; bb=sd[idx+2]; }
+        }
+      }
+      const oidx=(y*w+x)*4;
+      dd[oidx]=rr; dd[oidx+1]=gg; dd[oidx+2]=bb; dd[oidx+3]=a;
+    }
+  }
+  ctx.putImageData(dst,0,0);
+  return canvas;
+}
+
+/* ============================================================
+   DRAW FLOW (finger/mouse drawing -> becomes silhouette directly)
+============================================================ */
+const drawPane = $('drawPane');
+const drawCanvas = $('drawCanvas');
+const dctx = drawCanvas.getContext('2d');
+let drawing = false;
+let penColor = '#1c1a17';
+let strokes = []; // for undo, each stroke = array of points {x,y,color}
+let currentStroke = null;
+
+function openDraw(){
+  drawPane.classList.add('show');
+  sizeDrawCanvas();
+  clearDrawCanvas();
+}
+function sizeDrawCanvas(){
+  const wrap = $('drawCanvasWrap');
+  const rect = wrap.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio||1,2);
+  drawCanvas.width = rect.width*dpr;
+  drawCanvas.height = rect.height*dpr;
+  drawCanvas.style.width = rect.width+'px';
+  drawCanvas.style.height = rect.height+'px';
+  dctx.setTransform(dpr,0,0,dpr,0,0);
+}
+function clearDrawCanvas(){
+  dctx.clearRect(0,0,drawCanvas.width,drawCanvas.height);
+  strokes = [];
+}
+$('drawCloseBtn').addEventListener('click', ()=>drawPane.classList.remove('show'));
+$('drawClearAllBtn').addEventListener('click', clearDrawCanvas);
+$('undoBtn').addEventListener('click', ()=>{
+  strokes.pop();
+  redrawStrokes();
+});
+$('colorBlack').addEventListener('click', ()=>penColor='#1c1a17');
+$('colorRed').addEventListener('click', ()=>penColor='#e0432b');
+$('colorBlue').addEventListener('click', ()=>penColor='#2b5fe0');
+
+function redrawStrokes(){
+  dctx.clearRect(0,0,drawCanvas.width,drawCanvas.height);
+  strokes.forEach(s=>{
+    dctx.beginPath();
+    dctx.strokeStyle = s.color;
+    dctx.lineWidth = 7;
+    dctx.lineCap='round'; dctx.lineJoin='round';
+    s.pts.forEach((p,i)=>{
+      if(i===0) dctx.moveTo(p.x,p.y); else dctx.lineTo(p.x,p.y);
+    });
+    dctx.stroke();
+  });
+}
+
+function drawPointerPos(e){
+  const rect = drawCanvas.getBoundingClientRect();
+  return {x: e.clientX-rect.left, y: e.clientY-rect.top};
+}
+drawCanvas.addEventListener('pointerdown', (e)=>{
+  drawing = true;
+  const p = drawPointerPos(e);
+  currentStroke = {color:penColor, pts:[p]};
+  strokes.push(currentStroke);
+  dctx.beginPath();
+  dctx.strokeStyle = penColor;
+  dctx.lineWidth = 7;
+  dctx.lineCap='round'; dctx.lineJoin='round';
+  dctx.moveTo(p.x,p.y);
+});
+drawCanvas.addEventListener('pointermove', (e)=>{
+  if(!drawing) return;
+  const p = drawPointerPos(e);
+  currentStroke.pts.push(p);
+  dctx.lineTo(p.x,p.y);
+  dctx.stroke();
+});
+window.addEventListener('pointerup', ()=>{ drawing=false; });
+
+$('drawDoneBtn').addEventListener('click', ()=>{
+  if(strokes.length===0){ toast('먼저 그림을 그려주세요'); return; }
+  // Build silhouette from strokes' bounding box, ignoring paper background entirely (already alpha)
+  const dpr = Math.min(window.devicePixelRatio||1,2);
+  const w = drawCanvas.width, h = drawCanvas.height;
+  const imgData = dctx.getImageData(0,0,w,h);
+  const data = imgData.data;
+  let minX=w,minY=h,maxX=0,maxY=0;
+  for(let i=0;i<data.length;i+=4){
+    if(data[i+3] > 10){
+      const px=i/4, x=px%w, y=Math.floor(px/w);
+      if(x<minX)minX=x; if(x>maxX)maxX=x;
+      if(y<minY)minY=y; if(y>maxY)maxY=y;
+    }
+  }
+  if(maxX<minX||maxY<minY){ toast('그림을 인식하지 못했어요'); return; }
+  const pad = 14*dpr;
+  minX=Math.max(0,minX-pad); minY=Math.max(0,minY-pad);
+  maxX=Math.min(w-1,maxX+pad); maxY=Math.min(h-1,maxY+pad);
+  const cw=maxX-minX+1, ch=maxY-minY+1;
+  const out = document.createElement('canvas');
+  out.width=cw; out.height=ch;
+  out.getContext('2d').drawImage(drawCanvas, minX,minY,cw,ch, 0,0,cw,ch);
+
+  drawPane.classList.remove('show');
+  spawnDoodleFromSilhouette(out);
+});
+
+window.addEventListener('resize', ()=>{ if(drawPane.classList.contains('show')){ const old=drawCanvas.toDataURL(); sizeDrawCanvas(); } });
+
+/* ============================================================
+   PHOTO / VIDEO CAPTURE OF THE COMPOSED SCENE
+============================================================ */
+$('photoBtn').addEventListener('click', ()=>{
+  const link = document.createElement('a');
+  link.download = 'rakugaki-'+Date.now()+'.png';
+  link.href = renderCanvas.toDataURL('image/png');
+  link.click();
+  toast('사진을 저장했어요 📷');
+});
+
+let mediaRecorder = null;
+let recordedChunks = [];
+let isRecording = false;
+$('videoBtn').addEventListener('click', ()=>{
+  if(!isRecording){
+    startRecording();
+  } else {
+    stopRecording();
+  }
+});
+function startRecording(){
+  if(!renderCanvas.captureStream){ toast('이 브라우저는 녹화를 지원하지 않아요'); return; }
+  const stream = renderCanvas.captureStream(30);
+  let options = {mimeType:'video/webm;codecs=vp9'};
+  try{ mediaRecorder = new MediaRecorder(stream, options); }
+  catch(e){
+    try{ mediaRecorder = new MediaRecorder(stream, {mimeType:'video/webm'}); }
+    catch(e2){ toast('녹화를 시작할 수 없어요'); return; }
+  }
+  recordedChunks = [];
+  mediaRecorder.ondataavailable = (e)=>{ if(e.data.size>0) recordedChunks.push(e.data); };
+  mediaRecorder.onstop = ()=>{
+    const blob = new Blob(recordedChunks, {type:'video/webm'});
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.download = 'rakugaki-'+Date.now()+'.webm';
+    link.href = url;
+    link.click();
+    toast('영상을 저장했어요 🎬');
+    $('recDot').classList.remove('show');
+  };
+  mediaRecorder.start();
+  isRecording = true;
+  $('videoBtn').textContent = '⏹️';
+  $('recDot').classList.add('show');
+  toast('녹화를 시작했어요');
+}
+function stopRecording(){
+  if(mediaRecorder && isRecording){
+    mediaRecorder.stop();
+  }
+  isRecording = false;
+  $('videoBtn').textContent = '⏺️';
+}
+
+/* ============================================================
+   ORIENTATION / VISIBILITY SAFETY
+============================================================ */
+document.addEventListener('visibilitychange', ()=>{
+  if(document.hidden){ lastT = performance.now(); }
+});
+
+})();
+</script>
+</body>
+</html>
