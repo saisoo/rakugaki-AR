@@ -629,6 +629,13 @@ const PAPER_TONES = [
   ['#eef4e4','#cfe0bd'], // soft green
 ];
 
+function darkenHex(hex, amt){
+  const v = hex.replace('#','');
+  let r=parseInt(v.substr(0,2),16), g=parseInt(v.substr(2,2),16), b=parseInt(v.substr(4,2),16);
+  r=Math.round(r*(1-amt)); g=Math.round(g*(1-amt)); b=Math.round(b*(1-amt));
+  return `rgb(${r},${g},${b})`;
+}
+
 function buildCreatureSprite(inkCanvas){
   const w = inkCanvas.width, h = inkCanvas.height;
   const pad = Math.max(10, Math.round(Math.max(w,h)*0.09));
@@ -637,44 +644,64 @@ function buildCreatureSprite(inkCanvas){
   // place ink onto a padded working canvas
   const work = document.createElement('canvas');
   work.width=bw; work.height=bh;
-  const wctx = work.getContext('2d');
+  const wctx = work.getContext('2d', {willReadFrequently:true});
   wctx.drawImage(inkCanvas, pad, pad);
 
-  // alpha mask, dilated outward so the backing peeks out past the drawing's edges
+  // alpha mask, dilated outward so the backing peeks out past the drawing's edges.
+  // radius is capped so very large scans or very thin/sparse line doodles don't
+  // turn into a slow, shapeless blob.
   const srcData = wctx.getImageData(0,0,bw,bh);
   const alpha = new Uint8Array(bw*bh);
   for(let i=0;i<bw*bh;i++){ alpha[i] = srcData.data[i*4+3] > 10 ? 255 : 0; }
-  const dilated = fastDilate(alpha, bw, bh, Math.round(pad*0.9));
+  const rInner = clamp(Math.round(pad*0.9), 5, 34);
+  const rOuter = clamp(rInner + 4, 6, 40);
+  const dilatedInner = fastDilate(alpha, bw, bh, rInner);
+  const dilatedOuter = fastDilate(alpha, bw, bh, rOuter);
 
-  // paper/cardboard texture, masked to the dilated silhouette
   const [c1,c2] = PAPER_TONES[Math.floor(Math.random()*PAPER_TONES.length)];
+  const borderColor = darkenHex(c2, 0.32);
+
+  // border/rim layer (slightly larger than the paper fill, peeks out as an edge)
   const paper = document.createElement('canvas');
   paper.width=bw; paper.height=bh;
-  const pctx = paper.getContext('2d');
-  const grad = pctx.createLinearGradient(0,0,bw,bh);
-  grad.addColorStop(0,c1); grad.addColorStop(1,c2);
-  pctx.fillStyle = grad;
+  const pctx = paper.getContext('2d', {willReadFrequently:true});
+  pctx.fillStyle = borderColor;
   pctx.fillRect(0,0,bw,bh);
-  pctx.globalAlpha = 0.10;
+  let borderData = pctx.getImageData(0,0,bw,bh);
+  let bd = borderData.data;
+  for(let i=0;i<bw*bh;i++){ bd[i*4+3] = dilatedOuter[i] ? 255 : 0; }
+  pctx.putImageData(borderData,0,0);
+
+  // inner paper texture fill, drawn on a separate canvas then composited on top
+  // of the border so the rim remains visible around the edge
+  const innerFill = document.createElement('canvas');
+  innerFill.width=bw; innerFill.height=bh;
+  const ictx = innerFill.getContext('2d', {willReadFrequently:true});
+  const grad = ictx.createLinearGradient(0,0,bw,bh);
+  grad.addColorStop(0,c1); grad.addColorStop(1,c2);
+  ictx.fillStyle = grad;
+  ictx.fillRect(0,0,bw,bh);
+  ictx.globalAlpha = 0.10;
   const speckleCount = Math.min(500, Math.round((bw*bh)/45));
   for(let i=0;i<speckleCount;i++){
-    pctx.fillStyle = Math.random()<0.5 ? '#000' : '#fff';
-    pctx.fillRect(Math.random()*bw, Math.random()*bh, rand(1,2.2), rand(1,2.2));
+    ictx.fillStyle = Math.random()<0.5 ? '#000' : '#fff';
+    ictx.fillRect(Math.random()*bw, Math.random()*bh, rand(1,2.2), rand(1,2.2));
   }
-  pctx.globalAlpha = 1;
-  const paperData = pctx.getImageData(0,0,bw,bh);
-  const pd = paperData.data;
-  for(let i=0;i<bw*bh;i++){ pd[i*4+3] = dilated[i] ? pd[i*4+3] : 0; }
-  pctx.putImageData(paperData,0,0);
+  ictx.globalAlpha = 1;
+  const innerData = ictx.getImageData(0,0,bw,bh);
+  const idd = innerData.data;
+  for(let i=0;i<bw*bh;i++){ idd[i*4+3] = dilatedInner[i] ? idd[i*4+3] : 0; }
+  ictx.putImageData(innerData,0,0);
+  pctx.drawImage(innerFill,0,0);
 
-  // soft drop shadow from the same silhouette, offset slightly
+  // soft drop shadow following the outer silhouette, offset slightly
   const maskCanvas = document.createElement('canvas');
   maskCanvas.width=bw; maskCanvas.height=bh;
-  const mctx = maskCanvas.getContext('2d');
+  const mctx = maskCanvas.getContext('2d', {willReadFrequently:true});
   const maskData = mctx.createImageData(bw,bh);
   const md = maskData.data;
   for(let i=0;i<bw*bh;i++){
-    if(dilated[i]){ md[i*4+3]=140; }
+    if(dilatedOuter[i]){ md[i*4+3]=140; }
   }
   mctx.putImageData(maskData,0,0);
   const shadow = document.createElement('canvas');
@@ -684,7 +711,7 @@ function buildCreatureSprite(inkCanvas){
   shctx.drawImage(maskCanvas, Math.round(pad*0.15), Math.round(pad*0.3));
   shctx.filter = 'none';
 
-  // final flattened composite: shadow -> paper backing -> ink on top
+  // final flattened composite: shadow -> paper (border+fill) -> ink on top
   const final = document.createElement('canvas');
   final.width=bw; final.height=bh;
   const fctx = final.getContext('2d');
@@ -706,7 +733,12 @@ const DOODLE_FADE_MS = 6000;
 class Doodle {
   constructor(silhouetteCanvas, spawnX, spawnGroundY){
     this.inkCanvas = silhouetteCanvas; // kept for the tray thumbnail
-    this.sprite = buildCreatureSprite(silhouetteCanvas);
+    try{
+      this.sprite = buildCreatureSprite(silhouetteCanvas);
+    }catch(e){
+      console.error('paper sprite build failed, showing plain doodle instead', e);
+      this.sprite = silhouetteCanvas; // fail-safe: character still appears, just without paper backing
+    }
     this.w = this.sprite.width;
     this.h = this.sprite.height;
 
@@ -1137,7 +1169,7 @@ function dilateAlpha(canvas, r){
 ============================================================ */
 const drawPane = $('drawPane');
 const drawCanvas = $('drawCanvas');
-const dctx = drawCanvas.getContext('2d');
+const dctx = drawCanvas.getContext('2d', {willReadFrequently:true});
 let drawing = false;
 let penColor = '#1c1a17';
 let toolMode = 'pen'; // 'pen' | 'fill'
