@@ -35,6 +35,20 @@
   #renderCanvas{ position:absolute; inset:0; width:100%; height:100%; touch-action:none; }
 
   /* ---------- top bar ---------- */
+  #topbar, #dock, #charTray{
+    transition: opacity 0.35s ease;
+  }
+  #topbar.chrome-hidden, #dock.chrome-hidden, #charTray.chrome-hidden{
+    opacity: 0.06; pointer-events: none;
+  }
+  #chromeToggleBtn{
+    position:absolute; z-index:45;
+    top:calc(env(safe-area-inset-top) + 56px); right:14px;
+    width:38px; height:38px; border-radius:50%;
+    background:rgba(20,18,16,0.45); backdrop-filter:blur(6px);
+    border:1px solid rgba(255,255,255,0.18); color:#fff; font-size:16px;
+    display:flex; align-items:center; justify-content:center;
+  }
   #topbar{
     position:absolute; top:0; left:0; right:0;
     display:flex; align-items:center; justify-content:space-between;
@@ -132,6 +146,26 @@
     position:absolute; top:calc(env(safe-area-inset-top) + 18px); left:50%; transform:translateX(-50%);
     width:70vw; max-width:320px; accent-color:var(--accent); z-index:2;
   }
+
+  /* ---------- ground setup overlay ---------- */
+  #groundOverlay{ position:absolute; inset:0; z-index:52; display:none; }
+  #groundOverlay.show{ display:block; }
+  #groundCanvas{ position:absolute; inset:0; width:100%; height:100%; touch-action:none; }
+  #groundTopHint{
+    position:absolute; top:calc(env(safe-area-inset-top) + 14px); left:50%; transform:translateX(-50%);
+    background:rgba(20,18,16,0.6); color:#fff; font-size:13px; padding:8px 16px; border-radius:14px;
+    max-width:86vw; text-align:center;
+  }
+  #groundControls{
+    position:absolute; bottom:calc(env(safe-area-inset-bottom) + 20px); left:0; right:0;
+    display:flex; justify-content:center; gap:10px; flex-wrap:wrap; padding:0 14px;
+  }
+  #groundControls button{
+    border:none; padding:12px 16px; border-radius:14px; font-size:14px; font-weight:700;
+    background:rgba(255,255,255,0.14); color:#fff;
+  }
+  #groundControls button.primary{ background:var(--accent); }
+  #groundControls button.active{ background:var(--accent2); color:#08251f; }
 
   /* preview after threshold */
   #previewPane{ position:absolute; inset:0; z-index:51; background:#0d0c0b; display:none; flex-direction:column; }
@@ -324,7 +358,10 @@
   <!-- CLIENT MODE: simplified top bar + home -->
   <div id="clientTopbar">
     <div class="brand" style="color:var(--ink); text-shadow:none;">✏️ 그리기 모드</div>
-    <div class="statusPip ok"><span class="p"></span>연결됨</div>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div class="statusPip ok"><span class="p"></span>연결됨</div>
+      <button class="iconbtn" id="fullscreenBtnClient" style="background:rgba(0,0,0,0.08); border-color:rgba(0,0,0,0.12); color:var(--ink);">⛶</button>
+    </div>
   </div>
   <div id="clientHome">
     <div style="font-size:16px; font-weight:800;">그림을 그려서 화면으로 보내보세요</div>
@@ -341,10 +378,13 @@
 
   <div id="charTray"></div>
 
+  <button id="chromeToggleBtn" title="화면 정리하기">👁️</button>
+
   <div id="topbar">
     <div class="brand"><span class="dot"></span>낙서 AR</div>
     <div style="display:flex; gap:8px; align-items:center;">
       <div id="linkBadge" style="display:none;"><span class="pip"></span><span id="linkBadgeText"></span></div>
+      <button class="iconbtn" id="fullscreenBtn">⛶</button>
       <button class="iconbtn" id="helpBtn">?</button>
     </div>
   </div>
@@ -353,6 +393,8 @@
     <div class="hint" id="mainHint">＋ 버튼으로 낙서를 스캔하거나 그려서 살려보세요</div>
     <div class="tray">
       <button id="pokeModeBtn" title="찌르기">👆</button>
+      <button id="handTrackBtn" title="손 인식 충돌">🖐️</button>
+      <button id="groundSetupBtn" title="지면 설정">🪨</button>
       <div class="sep"></div>
       <button id="photoBtn" title="사진 찍기">📷</button>
       <button id="videoBtn" title="영상 녹화">⏺️</button>
@@ -363,6 +405,18 @@
       <button class="sideBtn" id="switchCamBtn">🔄</button>
       <button id="addBtn">＋</button>
       <button class="sideBtn" id="soundBtn">🔊</button>
+    </div>
+  </div>
+
+  <!-- GROUND SETUP OVERLAY -->
+  <div id="groundOverlay">
+    <canvas id="groundCanvas"></canvas>
+    <div id="groundTopHint">화면 속 실제 바닥선을 손가락/마우스로 점을 찍어 이어주세요</div>
+    <div id="groundControls">
+      <button id="groundObstacleModeBtn">🚧 장애물 찍기</button>
+      <button id="groundUndoBtn">↩ 되돌리기</button>
+      <button id="groundClearBtn">전체 초기화</button>
+      <button class="primary" id="groundDoneBtn">완료</button>
     </div>
   </div>
 
@@ -408,6 +462,7 @@
   <div id="toast"></div>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
 <script>
 (function(){
 "use strict";
@@ -466,7 +521,18 @@ let knownClients = new Map(); // clientId -> lastSeen timestamp (host side)
 
 $('roleSolo').addEventListener('click', ()=>{ MODE='solo'; closeRoleModal(); initApp(); });
 $('roleHost').addEventListener('click', ()=>{ MODE='host'; closeRoleModal(); initApp(); initHost(); });
-$('roleClient').addEventListener('click', ()=>{ MODE='client'; closeRoleModal(); initClientMode(); });
+$('roleClient').addEventListener('click', ()=>{
+  MODE='client';
+  closeRoleModal();
+  // this window is drawing-only — hide all the main AR-scene chrome,
+  // since there's no camera feed or characters here at all.
+  $('topbar').style.display = 'none';
+  $('dock').style.display = 'none';
+  $('charTray').style.display = 'none';
+  $('chromeToggleBtn').style.display = 'none';
+  $('recDot').style.display = 'none';
+  initClientMode();
+});
 
 function closeRoleModal(){ $('roleModal').classList.add('hide'); }
 
@@ -728,6 +794,77 @@ const DOODLE_LIFESPAN_MS = 100000; // ~100s life
 const DOODLE_FADE_MS = 6000;
 
 /* ============================================================
+   GROUND PHYSICS SYSTEM
+   The person taps out a ground line (and optional obstacle points)
+   once during setup. Everything below is stored as fractional
+   (0..1) screen coordinates so it stays valid across resizes.
+   If no ground has been set up, doodles fall back to the old
+   flat walking-band behavior — nothing breaks for people who
+   skip this feature.
+============================================================ */
+const GRAVITY = 900;              // px/s^2
+const JUMP_SPEED = 480;           // px/s upward impulse over obstacles
+const BOUNCE_RESTITUTION = 0.46;  // energy kept per bounce
+const BOUNCE_MIN_SPEED = 140;     // below this, a "bounce" just settles instead
+const SLIDE_SLOPE_THRESHOLD = 0.33; // radians (~19°) before a slope is "steep"
+const THROW_SPEED_THRESHOLD = 650;  // px/s collider speed that counts as a throw
+const THROW_IMPULSE_SCALE = 0.55;
+
+let groundPointsNorm = [];   // [{u,v}] in click order, for editing/undo
+let obstaclesNorm = [];      // [{u}] x-fraction only — obstacles always sit on the line
+let groundHistory = [];      // [{type:'ground'|'obstacle'}] for undo
+
+function hasGround(){ return groundPointsNorm.length >= 2; }
+
+function groundToScreenPoints(normArr){
+  const w = window.innerWidth, h = window.innerHeight;
+  return normArr.map(p => ({x: p.u*w, y: p.v*h}));
+}
+function getSortedGroundPoints(){
+  const pts = groundToScreenPoints(groundPointsNorm);
+  pts.sort((a,b)=>a.x-b.x);
+  return pts;
+}
+function getGroundXRange(){
+  const pts = getSortedGroundPoints();
+  if(pts.length < 2) return {min:0, max:window.innerWidth};
+  return {min: pts[0].x, max: pts[pts.length-1].x};
+}
+function groundY(x){
+  const pts = getSortedGroundPoints();
+  if(pts.length < 2) return window.innerHeight*0.8;
+  if(x <= pts[0].x) return pts[0].y;
+  if(x >= pts[pts.length-1].x) return pts[pts.length-1].y;
+  for(let i=0;i<pts.length-1;i++){
+    if(x >= pts[i].x && x <= pts[i+1].x){
+      const t = (x-pts[i].x) / ((pts[i+1].x-pts[i].x) || 1);
+      return lerp(pts[i].y, pts[i+1].y, t);
+    }
+  }
+  return pts[pts.length-1].y;
+}
+function groundSlopeAt(x){
+  const pts = getSortedGroundPoints();
+  if(pts.length < 2) return 0;
+  let i = 0;
+  if(x <= pts[0].x) i = 0;
+  else if(x >= pts[pts.length-1].x) i = pts.length-2;
+  else { for(let k=0;k<pts.length-1;k++){ if(x>=pts[k].x && x<=pts[k+1].x){ i=k; break; } } }
+  const a = pts[i], b = pts[i+1];
+  return Math.atan2(b.y-a.y, b.x-a.x);
+}
+function findObstacleAhead(x, dir){
+  const w = window.innerWidth;
+  for(const o of obstaclesNorm){
+    const ox = o.u*w;
+    if(dir > 0 && ox >= x && ox <= x + OBSTACLE_TRIGGER_DIST) return ox;
+    if(dir < 0 && ox <= x && ox >= x - OBSTACLE_TRIGGER_DIST) return ox;
+  }
+  return null;
+}
+const OBSTACLE_TRIGGER_DIST = 24;
+
+/* ============================================================
    CHARACTER MODEL — animated as one rigid cutout, never sliced
 ============================================================ */
 class Doodle {
@@ -757,6 +894,11 @@ class Doodle {
     this.idlePhase = Math.random()*Math.PI*2;
     this.scaleBounce = 1;
     this.bornAt = performance.now();
+    // physics (only engaged once a ground line has been set up)
+    this.vx = 0;
+    this.vy = 0;
+    this.grounded = true;
+    this._lastJumpedObstacleX = null;
     this.decideNextMove(true);
   }
 
@@ -777,26 +919,15 @@ class Doodle {
   lifeRatio(){ return clamp(1 - this.ageMs()/DOODLE_LIFESPAN_MS, 0, 1); }
   isExpired(){ return this.ageMs() >= DOODLE_LIFESPAN_MS; }
 
-  update(dt, bounds, others){
+  update(dt, bounds, others, colliders){
     this.stateTimer -= dt;
     this.scaleBounce = lerp(this.scaleBounce, 1, Math.min(1, dt*8));
 
-    if(this.state === 'poked'){
-      if(this.stateTimer<=0){ this.decideNextMove(); }
-    } else if(this.state === 'walk'){
-      this.x += this.dir*this.speed*dt;
-      this.hopPhase += dt*7.2;
-      if(this.stateTimer<=0) this.decideNextMove();
-    } else {
-      this.idlePhase += dt*1.6;
-      if(this.stateTimer<=0) this.decideNextMove();
-    }
+    const groundActive = hasGround();
+    if(groundActive){ this._updateGroundPhysics(dt); }
+    else { this._updateFlatWalk(dt, bounds); }
 
-    const halfW = this.dispW/2;
-    if(this.x - halfW < bounds.left){ this.x = bounds.left+halfW; this.dir = 1; if(this.state==='walk') sfxWall(); }
-    if(this.x + halfW > bounds.right){ this.x = bounds.right-halfW; this.dir = -1; if(this.state==='walk') sfxWall(); }
-    this.y = clamp(this.y, bounds.top, bounds.bottom);
-
+    // gentle doodle-doodle avoidance (unchanged)
     for(const o of others){
       if(o===this) continue;
       const d = dist(this.x,this.y,o.x,o.y);
@@ -807,19 +938,141 @@ class Doodle {
         this.x += nx*push*40*dt;
       }
     }
+
+    this._updateColliderPhysics(dt, colliders, bounds, groundActive);
+
+    if(!groundActive){ this.y = clamp(this.y, bounds.top, bounds.bottom); }
+  }
+
+  _updateFlatWalk(dt, bounds){
+    if(this.state === 'poked'){
+      if(this.stateTimer<=0){ this.decideNextMove(); }
+    } else if(this.state === 'walk'){
+      this.x += this.dir*this.speed*dt;
+      this.hopPhase += dt*7.2;
+      if(this.stateTimer<=0) this.decideNextMove();
+    } else {
+      this.idlePhase += dt*1.6;
+      if(this.stateTimer<=0) this.decideNextMove();
+    }
+    const halfW = this.dispW/2;
+    if(this.x - halfW < bounds.left){ this.x = bounds.left+halfW; this.dir = 1; if(this.state==='walk') sfxWall(); }
+    if(this.x + halfW > bounds.right){ this.x = bounds.right-halfW; this.dir = -1; if(this.state==='walk') sfxWall(); }
+  }
+
+  _updateGroundPhysics(dt){
+    const range = getGroundXRange();
+    if(this.grounded){
+      const slope = groundSlopeAt(this.x);
+      if(Math.abs(slope) > SLIDE_SLOPE_THRESHOLD){
+        this.state = 'slide';
+        this.vx += Math.sin(slope)*GRAVITY*dt*0.6;
+        this.vx *= 0.995;
+        this.x += this.vx*dt;
+        this.dir = this.vx>=0 ? 1 : -1;
+        this.hopPhase += dt*4;
+      } else {
+        this.vx = 0;
+        if(this.state === 'poked'){
+          if(this.stateTimer<=0){ this.decideNextMove(); }
+        } else if(this.state === 'walk' || this.state === 'slide'){
+          if(this.state==='slide') this.state='walk';
+          this.x += this.dir*this.speed*dt;
+          this.hopPhase += dt*7.2;
+          if(this.stateTimer<=0) this.decideNextMove();
+        } else {
+          this.idlePhase += dt*1.6;
+          if(this.stateTimer<=0) this.decideNextMove();
+        }
+      }
+
+      const halfW = this.dispW/2;
+      if(this.x - halfW < range.min){ this.x = range.min+halfW; this.dir = 1; this.vx = Math.abs(this.vx); }
+      if(this.x + halfW > range.max){ this.x = range.max-halfW; this.dir = -1; this.vx = -Math.abs(this.vx); }
+
+      this.y = groundY(this.x);
+
+      if(this.state==='walk' || this.state==='slide'){
+        const ox = findObstacleAhead(this.x, this.dir);
+        if(ox !== null && ox !== this._lastJumpedObstacleX){
+          this.vy = -JUMP_SPEED;
+          this.grounded = false;
+          this._lastJumpedObstacleX = ox;
+        }
+      }
+      if(this._lastJumpedObstacleX !== null && Math.abs(this.x - this._lastJumpedObstacleX) > 120){
+        this._lastJumpedObstacleX = null;
+      }
+    } else {
+      // airborne: falling, jumping, or thrown — real gravity arc
+      this.vy += GRAVITY*dt;
+      this.x += this.vx*dt;
+      this.y += this.vy*dt;
+      this.hopPhase += dt*9;
+
+      const halfW = this.dispW/2;
+      if(this.x - halfW < range.min){ this.x = range.min+halfW; this.vx = Math.abs(this.vx)*0.5; }
+      if(this.x + halfW > range.max){ this.x = range.max-halfW; this.vx = -Math.abs(this.vx)*0.5; }
+
+      const gy = groundY(this.x);
+      if(this.y >= gy){
+        this.y = gy;
+        if(Math.abs(this.vy) > BOUNCE_MIN_SPEED){
+          this.vy = -this.vy*BOUNCE_RESTITUTION;
+          this.vx *= 0.72;
+          sfxWall();
+        } else {
+          this.grounded = true;
+          this.vy = 0;
+          this.decideNextMove();
+        }
+      }
+    }
+  }
+
+  _updateColliderPhysics(dt, colliders, bounds, groundActive){
+    if(!colliders || !colliders.length){ this._wasColliding = false; return; }
+    const cx = this.x, cy = this.y - this.dispH*0.5;
+    let anyCollision = false;
+    for(const c of colliders){
+      const dx = cx - c.x, dy = cy - c.y;
+      const d = Math.hypot(dx,dy);
+      const combinedR = this.dispW*0.4 + (c.radius||30);
+      if(d < combinedR){
+        anyCollision = true;
+        const speed = Math.hypot(c.vx||0, c.vy||0);
+        if(groundActive && speed > THROW_SPEED_THRESHOLD){
+          this.vx = (c.vx||0) * THROW_IMPULSE_SCALE;
+          this.vy = (c.vy||0) * THROW_IMPULSE_SCALE - 160;
+          this.grounded = false;
+        } else if(d > 0.001){
+          const push = (combinedR-d)/combinedR;
+          const nx = dx/d, ny = dy/d;
+          this.x += nx*push*160*dt;
+          if(!groundActive) this.y += ny*push*110*dt;
+          this.dir = nx >= 0 ? 1 : -1;
+        }
+      }
+    }
+    if(anyCollision && !this._wasColliding){ this.poke(); }
+    this._wasColliding = anyCollision;
+    if(!groundActive) this.y = clamp(this.y, bounds.top, bounds.bottom);
   }
 
   draw(ctx){
-    const isWalk = this.state === 'walk';
+    const isWalk = (this.state === 'walk') && this.grounded;
     const isPoked = this.state === 'poked';
+    const isAirborne = !this.grounded;
 
     const hopRaw = isWalk ? Math.abs(Math.sin(this.hopPhase)) : 0; // 0=ground contact, 1=peak of hop
-    const idleBreath = isWalk ? 0 : Math.sin(this.idlePhase)*0.03;
+    const idleBreath = (!isWalk && !isAirborne) ? Math.sin(this.idlePhase)*0.03 : 0;
 
     const raise = hopRaw * this.dispH * 0.16;
     const stretchY = isWalk ? lerp(0.90, 1.12, hopRaw) : (1 + idleBreath);
     const stretchX = isWalk ? lerp(1.08, 0.95, hopRaw) : (1 - idleBreath*0.6);
-    const waddle = isWalk ? Math.sin(this.hopPhase) * 0.11 : Math.sin(this.idlePhase*0.6)*0.02;
+    const waddle = isWalk ? Math.sin(this.hopPhase) * 0.11
+      : isAirborne ? clamp((this.vx||0)*0.0006, -0.35, 0.35)
+      : Math.sin(this.idlePhase*0.6)*0.02;
     const pokeWiggle = isPoked ? Math.sin(this.stateTimer*40) * 0.22 : 0;
 
     const lifeRatio = this.lifeRatio();
@@ -852,13 +1105,23 @@ let doodles = [];
 
 function spawnDoodleFromSilhouette(silCanvas){
   const w = window.innerWidth, h = window.innerHeight;
-  const x = rand(w*0.25, w*0.75);
-  const y = rand(h*0.4, h*0.72);
+  let x, y;
+  if(hasGround()){
+    const range = getGroundXRange();
+    x = rand(range.min + (w*0.06), range.max - (w*0.06));
+    y = groundY(x) - rand(h*0.25, h*0.5); // start well above the ground, falls in
+  } else {
+    x = rand(w*0.25, w*0.75);
+    y = rand(h*0.4, h*0.72);
+  }
   const d = new Doodle(silCanvas, x, y);
+  if(hasGround()){ d.grounded = false; d.vy = 0; d.vx = 0; }
   doodles.push(d);
   sfxSpawn();
   updateCharTray();
-  toast('낙서가 살아났어요! 화면을 눌러 찔러보세요 ✨');
+  const hintEl = $('mainHint');
+  if(hintEl){ hintEl.remove(); }
+  toast(hasGround() ? '낙서가 하늘에서 떨어져요! ✨' : '낙서가 살아났어요! 화면을 눌러 찔러보세요 ✨');
 }
 
 function updateCharTray(){
@@ -900,6 +1163,66 @@ $('clearBtn').addEventListener('click', ()=>{
 });
 
 /* ============================================================
+   FULLSCREEN TOGGLE — works from either window (main AR screen
+   or the drawing-only client window).
+============================================================ */
+function toggleFullscreen(){
+  if(!document.fullscreenElement){
+    document.documentElement.requestFullscreen().catch(()=>{
+      toast('이 기기/브라우저에서는 전체화면을 지원하지 않아요');
+    });
+  } else {
+    document.exitFullscreen();
+  }
+}
+function refreshFullscreenIcons(){
+  const isFs = !!document.fullscreenElement;
+  const icon = isFs ? '⤢' : '⛶';
+  const fb = $('fullscreenBtn'); if(fb) fb.textContent = icon;
+  const fbc = $('fullscreenBtnClient'); if(fbc) fbc.textContent = icon;
+}
+document.addEventListener('fullscreenchange', refreshFullscreenIcons);
+$('fullscreenBtn').addEventListener('click', toggleFullscreen);
+$('fullscreenBtnClient').addEventListener('click', toggleFullscreen);
+
+/* ============================================================
+   CHROME VISIBILITY — lets the presenter declutter the screen
+   for the audience. Also drives how much "stage" the doodles
+   get: hidden UI means they can roam almost the full screen,
+   visible UI means they stay clear of the real button areas.
+============================================================ */
+let chromeHidden = false;
+function setChromeHidden(hidden){
+  chromeHidden = hidden;
+  $('topbar').classList.toggle('chrome-hidden', hidden);
+  $('dock').classList.toggle('chrome-hidden', hidden);
+  $('charTray').classList.toggle('chrome-hidden', hidden);
+  $('chromeToggleBtn').textContent = hidden ? '👁️‍🗨️' : '👁️';
+}
+$('chromeToggleBtn').addEventListener('click', ()=>{
+  setChromeHidden(!chromeHidden);
+  if(chromeHidden) toast('화면을 정리했어요. 다시 누르면 버튼이 돌아와요', 2200);
+});
+
+function computeStageBounds(w, h){
+  if(chromeHidden){
+    return {left: w*0.04, right: w*0.96, top: h*0.06, bottom: h*0.96};
+  }
+  let topSafe = h*0.28, bottomSafe = h*0.86;
+  try{
+    const topRect = $('topbar').getBoundingClientRect();
+    topSafe = Math.max(h*0.14, topRect.bottom + 14);
+    const dockRect = $('dock').getBoundingClientRect();
+    bottomSafe = Math.min(h*0.9, dockRect.top - 10);
+  }catch(e){ /* fall back to defaults above */ }
+  if(bottomSafe - topSafe < h*0.25){
+    // guard against tiny/overlapping measurements on unusual layouts
+    topSafe = h*0.28; bottomSafe = h*0.86;
+  }
+  return {left: w*0.06, right: w*0.94, top: topSafe, bottom: bottomSafe};
+}
+
+/* ============================================================
    MAIN RENDER LOOP
 ============================================================ */
 let lastT = performance.now();
@@ -924,9 +1247,12 @@ function frame(now){
     rctx.restore();
   }
 
-  const bounds = {left: w*0.06, right: w*0.94, top: h*0.28, bottom: h*0.86};
+  const bounds = computeStageBounds(w, h);
 
-  doodles.forEach(d=>d.update(dt, bounds, doodles));
+  pumpHandTracking();
+  const colliders = buildColliders();
+
+  doodles.forEach(d=>d.update(dt, bounds, doodles, colliders));
 
   const expired = doodles.filter(d=>d.isExpired());
   if(expired.length){
@@ -935,12 +1261,262 @@ function frame(now){
   }
 
   doodles.slice().sort((a,b)=>a.y-b.y).forEach(d=>d.draw(rctx));
+  drawColliderMarkers(rctx, colliders);
+  drawGroundOverlayLine(rctx);
 
   lifeBarTick += dt;
   if(lifeBarTick > 0.5){ lifeBarTick = 0; refreshLifeBars(); }
 
   requestAnimationFrame(frame);
 }
+
+function drawGroundOverlayLine(ctx){
+  if(!hasGround()) return;
+  const pts = getSortedGroundPoints();
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)';
+  ctx.lineWidth = 2;
+  ctx.setLineDash([6,6]);
+  ctx.beginPath();
+  pts.forEach((p,i)=>{ if(i===0) ctx.moveTo(p.x,p.y); else ctx.lineTo(p.x,p.y); });
+  ctx.stroke();
+  ctx.setLineDash([]);
+  const w = window.innerWidth;
+  obstaclesNorm.forEach(o=>{
+    const ox = o.u*w, oy = groundY(ox);
+    ctx.font = '18px sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    ctx.fillText('🚧', ox, oy);
+  });
+  ctx.restore();
+}
+
+/* ============================================================
+   PHYSICAL COLLIDERS — mouse cursor and/or camera-tracked hands.
+   Both feed the same "colliders" array the doodles collide with.
+============================================================ */
+const mouseCollider = { x:0, y:0, active:false };
+
+renderCanvas.addEventListener('pointermove', (e)=>{
+  if(e.pointerType !== 'mouse') return; // touch/pen keep their own tap-to-poke behavior
+  const rect = renderCanvas.getBoundingClientRect();
+  mouseCollider.x = e.clientX - rect.left;
+  mouseCollider.y = e.clientY - rect.top;
+  mouseCollider.active = true;
+});
+renderCanvas.addEventListener('pointerleave', (e)=>{
+  if(e.pointerType === 'mouse') mouseCollider.active = false;
+});
+
+let handTrackingEnabled = false;
+let handsModel = null;
+let handsBusy = false;
+let handPoints = []; // [{x,y}] in renderCanvas screen space
+
+function videoPointToScreen(u, v){
+  const w = window.innerWidth, h = window.innerHeight;
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if(!vw || !vh) return {x:w/2, y:h/2};
+  const scale = Math.max(w/vw, h/vh);
+  const dw = vw*scale, dh = vh*scale;
+  const dx = (w-dw)/2, dy = (h-dh)/2;
+  const px = dx + u*vw*scale;
+  const py = dy + v*vh*scale;
+  const sx = (currentFacing === 'user') ? (w - px) : px;
+  return {x: sx, y: py};
+}
+
+function onHandResults(results){
+  const pts = [];
+  if(results.multiHandLandmarks){
+    for(const landmarks of results.multiHandLandmarks){
+      // landmark 9 = middle-finger MCP joint, a stable palm-center point
+      const p = landmarks[9];
+      pts.push(videoPointToScreen(p.x, p.y));
+    }
+  }
+  handPoints = pts;
+}
+
+function initHandsModel(){
+  if(handsModel || typeof Hands === 'undefined') return;
+  handsModel = new Hands({ locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}` });
+  handsModel.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6 });
+  handsModel.onResults(onHandResults);
+}
+
+async function pumpHandTracking(){
+  if(!handTrackingEnabled || !cameraStarted || video.readyState < 2) return;
+  if(!handsModel){ initHandsModel(); return; }
+  if(handsBusy) return;
+  handsBusy = true;
+  try{ await handsModel.send({image: video}); }
+  catch(e){ console.error('hand tracking error', e); }
+  handsBusy = false;
+}
+
+let _prevMouse = {x:0, y:0, t:0, has:false};
+let _prevHandPoints = [];
+
+function buildColliders(){
+  const now = performance.now();
+  const colliders = [];
+
+  if(mouseCollider.active){
+    let vx=0, vy=0;
+    if(_prevMouse.has){
+      const dt = Math.max(0.001, (now-_prevMouse.t)/1000);
+      vx = (mouseCollider.x - _prevMouse.x)/dt;
+      vy = (mouseCollider.y - _prevMouse.y)/dt;
+    }
+    colliders.push({x: mouseCollider.x, y: mouseCollider.y, radius: 26, vx, vy});
+    _prevMouse = {x: mouseCollider.x, y: mouseCollider.y, t: now, has: true};
+  } else {
+    _prevMouse.has = false;
+  }
+
+  if(handTrackingEnabled){
+    handPoints.forEach((p,i)=>{
+      let vx=0, vy=0;
+      const prev = _prevHandPoints[i];
+      if(prev){
+        const dt = Math.max(0.001, (now-prev.t)/1000);
+        vx = (p.x-prev.x)/dt;
+        vy = (p.y-prev.y)/dt;
+      }
+      colliders.push({x: p.x, y: p.y, radius: 50, vx, vy});
+    });
+    _prevHandPoints = handPoints.map(p=>({x: p.x, y: p.y, t: now}));
+  } else {
+    _prevHandPoints = [];
+  }
+
+  return colliders;
+}
+
+function drawColliderMarkers(ctx, colliders){
+  if(!colliders.length) return;
+  ctx.save();
+  for(const c of colliders){
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, c.radius*0.5, 0, Math.PI*2);
+    ctx.fillStyle = 'rgba(255,255,255,0.18)';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+$('handTrackBtn').addEventListener('click', async ()=>{
+  handTrackingEnabled = !handTrackingEnabled;
+  $('handTrackBtn').classList.toggle('active', handTrackingEnabled);
+  if(handTrackingEnabled){
+    if(!cameraStarted){ await startCamera(currentFacing); }
+    initHandsModel();
+    toast('손을 카메라에 비추면 캐릭터와 부딪혀요 🖐️');
+  } else {
+    handPoints = [];
+    toast('손 인식을 껐어요');
+  }
+});
+
+/* ============================================================
+   GROUND SETUP EDITOR — tap out the floor line once; everything
+   after that (gravity, bounce, slope slide, obstacle jump) runs
+   automatically off the stored line.
+============================================================ */
+const groundOverlay = $('groundOverlay');
+const groundCanvas = $('groundCanvas');
+const gctx = groundCanvas.getContext('2d');
+let placingObstacle = false;
+
+function sizeGroundCanvas(){
+  const w = window.innerWidth, h = window.innerHeight;
+  const dpr = Math.min(window.devicePixelRatio||1, 2);
+  groundCanvas.width = w*dpr; groundCanvas.height = h*dpr;
+  groundCanvas.style.width = w+'px'; groundCanvas.style.height = h+'px';
+  gctx.setTransform(dpr,0,0,dpr,0,0);
+}
+
+function redrawGroundEditor(){
+  const w = window.innerWidth, h = window.innerHeight;
+  gctx.clearRect(0,0,w,h);
+  const pts = groundToScreenPoints(groundPointsNorm); // keep click order for the editor view
+  if(pts.length){
+    gctx.strokeStyle = '#ff5a36';
+    gctx.lineWidth = 3;
+    gctx.beginPath();
+    pts.forEach((p,i)=>{ if(i===0) gctx.moveTo(p.x,p.y); else gctx.lineTo(p.x,p.y); });
+    gctx.stroke();
+    pts.forEach(p=>{
+      gctx.beginPath();
+      gctx.arc(p.x,p.y,7,0,Math.PI*2);
+      gctx.fillStyle = '#ff5a36';
+      gctx.fill();
+      gctx.lineWidth = 2; gctx.strokeStyle = '#fff';
+      gctx.stroke();
+    });
+  }
+  obstaclesNorm.forEach((o,i)=>{
+    const ox = o.u*w;
+    const oy = groundPointsNorm.length>=2 ? groundY(ox) : h*0.7;
+    gctx.font = '26px sans-serif';
+    gctx.textAlign = 'center'; gctx.textBaseline = 'bottom';
+    gctx.fillText('🚧', ox, oy);
+  });
+}
+
+function openGroundSetup(){
+  if(!cameraStarted){ startCamera(currentFacing); }
+  sizeGroundCanvas();
+  redrawGroundEditor();
+  groundOverlay.classList.add('show');
+}
+
+groundCanvas.addEventListener('pointerdown', (e)=>{
+  e.preventDefault();
+  const rect = groundCanvas.getBoundingClientRect();
+  const x = e.clientX - rect.left, y = e.clientY - rect.top;
+  const w = window.innerWidth, h = window.innerHeight;
+  if(placingObstacle){
+    obstaclesNorm.push({u: x/w});
+    groundHistory.push({type:'obstacle'});
+  } else {
+    groundPointsNorm.push({u: x/w, v: y/h});
+    groundHistory.push({type:'ground'});
+  }
+  redrawGroundEditor();
+}, {passive:false});
+
+$('groundObstacleModeBtn').addEventListener('click', ()=>{
+  placingObstacle = !placingObstacle;
+  $('groundObstacleModeBtn').classList.toggle('active', placingObstacle);
+  $('groundTopHint').textContent = placingObstacle
+    ? '점프시키고 싶은 지점을 탭하세요 🚧'
+    : '화면 속 실제 바닥선을 손가락/마우스로 점을 찍어 이어주세요';
+});
+$('groundUndoBtn').addEventListener('click', ()=>{
+  const last = groundHistory.pop();
+  if(!last){ toast('되돌릴 게 없어요'); return; }
+  if(last.type==='ground') groundPointsNorm.pop();
+  else obstaclesNorm.pop();
+  redrawGroundEditor();
+});
+$('groundClearBtn').addEventListener('click', ()=>{
+  groundPointsNorm = []; obstaclesNorm = []; groundHistory = [];
+  redrawGroundEditor();
+});
+$('groundDoneBtn').addEventListener('click', ()=>{
+  groundOverlay.classList.remove('show');
+  if(hasGround()){ toast('지면이 설정됐어요! 이제 캐릭터가 중력의 영향을 받아요 🪨'); }
+  else { toast('지면을 2개 이상의 점으로 그려야 적용돼요'); }
+});
+$('groundSetupBtn').addEventListener('click', ()=>{
+  openGroundSetup();
+});
+window.addEventListener('resize', ()=>{ if(groundOverlay.classList.contains('show')){ sizeGroundCanvas(); redrawGroundEditor(); } });
 
 /* ============================================================
    TAP INTERACTION on stage: poke doodle
